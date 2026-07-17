@@ -3,7 +3,10 @@ package main
 import (
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
+	"os"
+	"path/filepath"
 
 	"github.com/bootdotdev/learn-file-storage-s3-golang-starter/internal/auth"
 	"github.com/google/uuid"
@@ -46,25 +49,51 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 	}
 	defer file.Close()
 
-	mediaType := header.Header.Get("Content-Type")
+	contentType := header.Header.Get("Content-Type")
 
-	data, err := io.ReadAll(file)
+	mediaType, _, err := mime.ParseMediaType(contentType)
 	if err != nil {
-		respondWithError(w, http.StatusInternalServerError, "unable to read file", err)
+		respondWithError(w, http.StatusBadRequest, "invalid content-type", err)
 		return
 	}
+
+	if mediaType != "image/jpeg" && mediaType != "image/png" {
+		respondWithError(w, http.StatusBadRequest, "invalid file type", nil)
+	}
+
+	exts, err := mime.ExtensionsByType(mediaType)
+	if err != nil || len(exts) == 0 {
+		respondWithError(w, http.StatusBadRequest, "could not determine file extension", err)
+		return
+	}
+	ext := exts[0]
+
 	video, err := cfg.db.GetVideo(videoID)
 	if err != nil {
 		respondWithError(w, http.StatusNotFound, "unable to find video", err)
 		return
 	}
 	if video.UserID != userID {
-		fmt.Printf("video owner: %v, authenticated user: %v\n", video.UserID, userID)
 		respondWithError(w, http.StatusUnauthorized, "this video is not associated with your account", nil)
 		return
 	}
-	videoThumbnails[videoID] = thumbnail{data: data, mediaType: mediaType}
-	thumbnailURL := fmt.Sprintf("http://localhost:%s/api/thumbnails/%s", cfg.port, videoID)
+	filePath := filepath.Join(cfg.assetsRoot, videoID.String()+ext)
+
+	dst, err := os.Create(filePath)
+
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "could not make file on disk", err)
+		return
+	}
+	defer dst.Close()
+
+	if _, err := io.Copy(dst, file); err != nil {
+		respondWithError(w, http.StatusInternalServerError, "could not write file to disk", err)
+		return
+	}
+
+	thumbnailURL := fmt.Sprintf("http://localhost:%s/assets/%s%s", cfg.port, videoID, ext)
+
 	video.ThumbnailURL = &thumbnailURL
 	err = cfg.db.UpdateVideo(video)
 	if err != nil {
