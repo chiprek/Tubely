@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/rand"
+	"encoding/base64"
 	"fmt"
 	"io"
 	"mime"
@@ -46,6 +48,7 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 	file, header, err := r.FormFile("thumbnail")
 	if err != nil {
 		respondWithError(w, http.StatusBadRequest, "error retriving file", err)
+		return
 	}
 	defer file.Close()
 
@@ -77,7 +80,16 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 		respondWithError(w, http.StatusUnauthorized, "this video is not associated with your account", nil)
 		return
 	}
-	filePath := filepath.Join(cfg.assetsRoot, videoID.String()+ext)
+	randomBytes := make([]byte, 32)
+
+	if _, err := rand.Read(randomBytes); err != nil {
+		respondWithError(w, http.StatusInternalServerError, "failed to gen random file name", err)
+		return
+	}
+
+	fileName := base64.RawURLEncoding.EncodeToString(randomBytes)
+
+	filePath := filepath.Join(cfg.assetsRoot, fileName+ext)
 
 	dst, err := os.Create(filePath)
 
@@ -92,7 +104,7 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	thumbnailURL := fmt.Sprintf("http://localhost:%s/assets/%s%s", cfg.port, videoID, ext)
+	thumbnailURL := fmt.Sprintf("http://localhost:%s/assets/%s%s", cfg.port, fileName, ext)
 
 	video.ThumbnailURL = &thumbnailURL
 	err = cfg.db.UpdateVideo(video)
